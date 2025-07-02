@@ -6,7 +6,6 @@ const CreateRoomForm = () => {
             </div>
             <div className="form-group border mb-3">
                 <div className="input-group d-flex align-items-center">
-                    {/* <span className="input-group-text">Room ID</span> */}
                     <input type="text" className="form-control my-2 border-0" disabled placeholder="Generate room code" />
                     <div className="input-group-append d-flex gap-1">
                         <button className="btn btn-primary btn-sm me-1" type="button">generate</button>
