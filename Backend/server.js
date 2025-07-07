@@ -9,9 +9,11 @@ app.get("/", (req, res) => {
   res.send("hii")});
 
 io.on("connection", (socket) => {
-  console.log("A user connected");
-  socket.on("disconnect", () => {
-    console.log("A user disconnected");
+  socket.on("userJoined", (data) => {
+    const {roomId, name, userId, host, presenter} = data;
+    socket.join(roomId);
+    socket.emit("userIsJoined", {"success": true})
+    console.log(data);
   });
 });
   
