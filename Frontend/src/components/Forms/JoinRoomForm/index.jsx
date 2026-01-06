@@ -21,7 +21,6 @@ const JoinRoomForm = ({socket, setUser, uuid}) => {
         console.log("Joining room with data:", roomData);
         
         navigate(`/${roomId}`);
-        socket.emit('userJoined', roomData);
     }
 
     return (

@@ -1,5 +1,7 @@
-import { useState, useEffect, useLayoutEffect, use } from "react";
+import { useState, useEffect, useLayoutEffect } from "react";
 import rough from "roughjs";
+import socket from '../../Socket'; // instead of creating socket here
+
 
 const roughGenerator = rough.generator();
 
@@ -10,44 +12,66 @@ const Whiteboard = ({
   setElements,
   tool,
   color,
+  roomId,
+  user,
+  isLocked,
+  onDrawStart
 }) => {
   const [isDrawing, setIsDrawing] = useState(false);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    canvas.width = window.innerWidth * 2;
-    canvas.height = window.innerHeight / 1.5;
+    if (!canvas) return;
+    const parent = canvas.parentElement;
     const ctx = canvas.getContext("2d");
-
-    ctx.strokeStyle = "black";
-    ctx.lineWidth = 2;
-    ctx.lineCap = "round";
-
     ctxRef.current = ctx;
+
+    const resizeCanvas = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const { clientWidth, clientHeight } = parent;
+      
+      canvas.width = clientWidth * dpr;
+      canvas.height = clientHeight * dpr;
+      canvas.style.width = `${clientWidth}px`;
+      canvas.style.height = `${clientHeight}px`;
+      
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      setCanvasSize({ width: clientWidth, height: clientHeight });
+    };
+
+    const resizeObserver = new ResizeObserver(resizeCanvas);
+    resizeObserver.observe(parent);
+    resizeCanvas();
+
+    return () => resizeObserver.disconnect();
   }, []);
 
-  useEffect(() => {
-    ctxRef.current.strokeStyle = color;
-  }, [color]);
-
   useLayoutEffect(() => {
-    const roughCanvas = rough.canvas(canvasRef.current);
+    const canvas = canvasRef.current;
+    const ctx = ctxRef.current;
+    if (!ctx || !canvas) return;
 
-    if (elements.length > 0) {
-      ctxRef.current.clearRect(
-        0,
-        0,
-        canvasRef.current.width,
-        canvasRef.current.height
-      );
-    }
-    elements.forEach((element) => {
-      if (element.type === "pencil" || element.type === "eraser") {
-        roughCanvas.linearPath(element.path, {
-          stroke: element.stroke,
-          strokeWidth: element.strokeWidth || 5,
-          roughness: 0,
-        });
+    // Clear
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    const roughCanvas = rough.canvas(canvas);
+    elements.forEach((element, index) => {
+      if (element.type === "pencil") {
+        ctx.strokeStyle = element.stroke;
+        ctx.lineWidth = element.strokeWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        const [first, ...rest] = element.path;
+        if (first) {
+          ctx.moveTo(first[0], first[1]);
+          rest.forEach(([px, py]) => ctx.lineTo(px, py));
+          ctx.stroke();
+        }
       } else if (element.type === "line") {
         roughCanvas.draw(
           roughGenerator.line(
@@ -70,97 +94,142 @@ const Whiteboard = ({
         );
       }
     });
-  }, [elements]);
+  }, [elements, canvasSize]);
+
+  const broadcastElement = (element) => {
+    socket.emit("draw-element", { element, roomId });
+  };
+
+
+  // Receive elements from others
+  useEffect(() => {
+    socket.on("receive-element", ({ element }) => {
+      setElements((prev) => {
+        const last = prev[prev.length - 1];
+        if (
+          last &&
+          last.offsetX === element.offsetX &&
+          last.offsetY === element.offsetY &&
+          last.type === element.type
+        ) {
+          // Replace the last element with the updated one
+          return [...prev.slice(0, -1), element];
+        } else {
+          // Add new element
+          return [...prev, element];
+        }
+      });
+    });
+
+    socket.on("receive-elements", ({ elements }) => {
+      setElements(elements);
+    });
+
+    return () => {
+      socket.off("receive-element");
+      socket.off("receive-elements");
+    };
+  }, [setElements]);
+
+
+  // useEffect(() => {
+  //   const canvas = canvasRef.current;
+  //   const ctx = canvas.getContext("2d");
+
+  //   ctx.clearRect(0,0,canvas.width, canvas.height);
+
+  //   elements.forEach((element) => {
+  //     drawElement(ctx, element);
+  //   })
+  // },[elements]);
+  const getCoordinates = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+  };
 
   const handleMouseMove = (e) => {
-    const { offsetX, offsetY } = e.nativeEvent;
+    if (!isDrawing) return;
+    
+    // Permission check
+    const isHost = user?.host || false;
+    const isPresenter = user?.presenter || false;
+    if (isLocked && !isHost && !isPresenter) {
+      setIsDrawing(false);
+      return;
+    }
 
-    if (isDrawing) {
+    const { x, y } = getCoordinates(e);
+
+    setElements((prevElements) => {
+      const lastElement = prevElements[prevElements.length - 1];
+      if (!lastElement) return prevElements;
+
+      let updatedEle;
       if (tool === "pencil" || tool === "eraser") {
-        const { path } = elements[elements.length - 1];
-        const newPath = [...path, [offsetX, offsetY]];
-        setElements((prevElements) =>
-          prevElements.map((ele, index) => {
-            if (index === elements.length - 1) {
-              return {
-                ...ele,
-                path: newPath,
-              };
-            }
-            return ele;
-          })
-        );
+        updatedEle = {
+          ...lastElement,
+          path: [...lastElement.path, [x, y]],
+        };
       } else if (tool === "line") {
-        setElements((prevElements) =>
-          prevElements.map((ele, index) => {
-            if (index === elements.length - 1) {
-              return {
-                ...ele,
-                width: offsetX,
-                height: offsetY,
-              };
-            }
-            return ele;
-          })
-        );
+        updatedEle = {
+          ...lastElement,
+          width: x,
+          height: y,
+        };
       } else if (tool === "rect") {
-        setElements((prevElements) =>
-          prevElements.map((ele, index) => {
-            if (index === elements.length - 1) {
-              return {
-                ...ele,
-                width: offsetX - ele.offsetX,
-                height: offsetY - ele.offsetY,
-              };
-            }
-            return ele;
-          })
-        );
+        updatedEle = {
+          ...lastElement,
+          width: x - lastElement.offsetX,
+          height: y - lastElement.offsetY,
+        };
       }
-    }
+
+      if (updatedEle) {
+        broadcastElement(updatedEle);
+        const newElements = [...prevElements];
+        newElements[newElements.length - 1] = updatedEle;
+        return newElements;
+      }
+      return prevElements;
+    });
   };
+
   const handleMouseDown = (e) => {
-    const { offsetX, offsetY } = e.nativeEvent;
+    // Permission check
+    const isHost = user?.host || false;
+    const isPresenter = user?.presenter || false;
+    if (isLocked && !isHost && !isPresenter) return;
 
+    const { x, y } = getCoordinates(e);
+    let newElement;
     if (tool === "pencil" || tool === "eraser") {
-      setElements((prevElements) => [
-        ...prevElements,
-        {
-          type: "pencil", // You can change this based on the selected tool
-          offsetX,
-          offsetY,
-          path: [[offsetX, offsetY]], // Store the path as an array of points
-          stroke: tool === "eraser" ? "white" : color,
-          strokeWidth: tool === "eraser" ? 20 : 5 // You can change this to use a color state
-        },
-      ]);
-    } else if (tool === "line") {
-      setElements((prevElements) => [
-        ...prevElements,
-        {
-          type: "line", // You can change this based on the selected tool
-          offsetX,
-          offsetY,
-          width: offsetX, // Initial width and height will be updated on mouse move
-          height: offsetY,
-          stroke: color, // You can change this to use a color state
-        },
-      ]);
-    } else if (tool === "rect") {
-      setElements((prevElements) => [
-        ...prevElements,
-        {
-          type: "rect", // You can change this based on the selected tool
-          offsetX,
-          offsetY,
-          width: 0, // Initial width and height will be updated on mouse move
-          height: 0,
-          stroke: color, // You can change this to use a color state
-        },
-      ]);
+      newElement = {
+        type: "pencil",
+        offsetX: x,
+        offsetY: y,
+        path: [[x, y]],
+        stroke: tool === "eraser" ? "#ffffff" : color,
+        strokeWidth: tool === "eraser" ? 20 : 5,
+      };
+    } else {
+      newElement = {
+        type: tool,
+        offsetX: x,
+        offsetY: y,
+        width: x,
+        height: y,
+        stroke: color,
+      };
     }
-
+    setElements((prev) => [...prev, newElement]);
+    broadcastElement(newElement);
     setIsDrawing(true);
+    if (onDrawStart) onDrawStart();
   };
 
   const handleMouseUp = () => {
@@ -173,9 +242,10 @@ const Whiteboard = ({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={() => setIsDrawing(false)}
-      className="border border-dark border-3 h-100 w-100 overflow-hidden"
+      className="h-100 w-100 overflow-hidden position-relative"
+      style={{ cursor: tool === 'pencil' ? 'crosshair' : 'default' }}
     >
-      <canvas ref={canvasRef} />
+      <canvas ref={canvasRef} style={{ display: 'block', position: 'absolute', top: 0, left: 0 }} />
     </div>
   );
 };
