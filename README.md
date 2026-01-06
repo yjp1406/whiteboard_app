@@ -2,7 +2,7 @@
 
 A sophisticated, multi-user whiteboard application built for seamless real-time collaboration. This project demonstrates high-performance canvas rendering, complex state management, and bi-directional socket communication.
 
-![Whiteboard Demo](https://whiteboard-eljrurhhx-yjp1406s-projects.vercel.app/9a68d2ff-a3a2-4780-957a-af47fd20e750)
+🌐 **Live Demo:** [Open Whiteboard](https://whiteboard-eljrurhhx-yjp1406s-projects.vercel.app/9a68d2ff-a3a2-4780-957a-af47fd20e750)
 
 ## 🚀 Features
 
